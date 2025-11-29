@@ -9,7 +9,8 @@ class Program
   }
 static void Main(string[] args)
 {
-Console.Write("write any thing");
+Console.WriteLine("write any thing");
+  string a = Console.ReadLine();
   one();
   if (a == "1")
   {
