@@ -1,0 +1,38 @@
+using System;
+namespace something
+{
+class Program 
+{
+static void s(string a = "الم نشرح لك صدرك";)
+{
+Console.WriteLine(a);
+}
+static void Main(string[] args)
+{
+s();
+string a = Console.ReadLine();
+if (a == "h")
+{
+a = Console.ReadLine();
+}
+else
+{
+a = Console.ReadLine();
+}
+if (a == "help")
+{
+Console.WriteLine("مرحبا وحش النقاية.. كيف الحال؟ امثل البال كان");
+switch (a)
+{
+case "مرحبا":
+a = Console.ReadLine();
+break;
+case "شرير":
+const a = "haha";
+Console.WriteLine(a);
+break;
+}
+}
+}
+}
+}
