@@ -28,7 +28,7 @@ case "مرحبا":
 a = Console.ReadLine();
 break;
 case "شرير":
-const a = "haha";
+a = "haha";
 Console.WriteLine(a);
 break;
 }
