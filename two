@@ -3,7 +3,7 @@ namespace something
 {
 class Program 
 {
-static void s(string a = "الم نشرح لك صدرك";)
+static void s(string a = "الم نشرح لك صدرك")
 {
 Console.WriteLine(a);
 }
