@@ -3,11 +3,13 @@ html,body,#c{height:100%;width:100%}
 body{font-family:Arial,Helvetica,sans-serif;overflow:hidden;background:#111}
 #ui{position:absolute;left:12px;top:12px;color:#fff;z-index:5}
 #tips{background:rgba(255,255,255,0.06);padding:6px 10px;border-radius:6px;margin-top:8px;color:#ffd}
-#brush-controls{margin-top:10px;background:rgba(0,0,0,0.4);padding:8px;border-radius:6px;}
+#brush-controls{position:absolute;bottom:12px;left:12px;width:200px;background:rgba(0,0,0,0.4);padding:8px;border-radius:6px;}
 #brush-controls label{display:block;margin-bottom:6px;font-size:0.9em}
+#brush-controls label input{margin-left:4px}
 #brush-settings{margin-top:6px}
 #brush-settings input[type="range"],
 #brush-settings input[type="number"]{width:100%}
 #brush-settings input[type="color"]{padding:0;border:none;width:40px;height:24px;vertical-align:middle}
 #brush-settings .setting{margin-bottom:4px}
 canvas{display:block}
+#negative-toggle{margin-left:6px}
