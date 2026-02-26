@@ -37,10 +37,186 @@ scene.add(grid);
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
+// simple brush configuration
+const brushes = {
+  clay: {display: 'clay'},
+  inflate: {display: 'inflate'},
+  drag: {display: 'drag'},
+  move: {display: 'move'},
+  paint: {display: 'paint'},
+  transform: {display: 'transform'},
+  crease: {display: 'crease'},
+  CC0: {display: 'CC0'},
+  wire: {display: 'wire'},
+  measure: {display: 'measure'}
+};
+let currentBrush = 'clay';
+const brushParams = {
+  strength: 0.02,
+  radius: 0.12,
+  color: '#ff0000',
+  roughness: 0.5,
+  metallic: 0.1,
+  lightAction: false,
+  lightColor: '#ffffff',
+  negativeDyntopo: false,
+  forceDyntopo: false,
+  intensity: 0.1
+};
+
+function updateBrushSettingsUI(){
+  const container = document.getElementById('brush-settings');
+  container.innerHTML='';
+  function addSetting(labelText, input){
+    const div=document.createElement('div');
+    div.className='setting';
+    const label=document.createElement('label');
+    label.textContent=labelText+': ';
+    label.appendChild(input);
+    div.appendChild(label);
+    container.appendChild(div);
+  }
+  switch(currentBrush){
+    case 'clay':
+      {
+        const s=document.createElement('input'); s.type='range'; s.min=0.001; s.max=0.1; s.step=0.001; s.value=brushParams.strength;
+        s.oninput=e=>brushParams.strength=parseFloat(e.target.value);
+        addSetting('strength',s);
+        const r=document.createElement('input'); r.type='range'; r.min=0.01; r.max=0.5; r.step=0.01; r.value=brushParams.radius;
+        r.oninput=e=>brushParams.radius=parseFloat(e.target.value);
+        addSetting('radius',r);
+      }
+      break;
+    case 'inflate':
+      // same as clay plus negative + dyntopo
+      {
+        const s=document.createElement('input'); s.type='range'; s.min=0.001; s.max=0.1; s.step=0.001; s.value=brushParams.strength;
+        s.oninput=e=>brushParams.strength=parseFloat(e.target.value);
+        addSetting('strength',s);
+        const r=document.createElement('input'); r.type='range'; r.min=0.01; r.max=0.5; r.step=0.01; r.value=brushParams.radius;
+        r.oninput=e=>brushParams.radius=parseFloat(e.target.value);
+        addSetting('radius',r);
+        const neg=document.createElement('input'); neg.type='checkbox'; neg.checked=brushParams.negativeDyntopo;
+        neg.onchange=e=>brushParams.negativeDyntopo=e.target.checked;
+        addSetting('negative/dyntopo',neg);
+      }
+      break;
+    case 'drag':
+    case 'move':
+    case 'wire':
+      // similar controls
+      {
+        const s=document.createElement('input'); s.type='range'; s.min=0.001; s.max=0.2; s.step=0.001; s.value=brushParams.strength;
+        s.oninput=e=>brushParams.strength=parseFloat(e.target.value);
+        addSetting('strength',s);
+        const r=document.createElement('input'); r.type='range'; r.min=0.01; r.max=0.5; r.step=0.01; r.value=brushParams.radius;
+        r.oninput=e=>brushParams.radius=parseFloat(e.target.value);
+        addSetting('radius',r);
+      }
+      break;
+    case 'paint':
+      {
+        const c=document.createElement('input'); c.type='color'; c.value=brushParams.color;
+        c.oninput=e=>brushParams.color=e.target.value;
+        addSetting('color',c);
+        const rough=document.createElement('input'); rough.type='range'; rough.min=0; rough.max=1; rough.step=0.01; rough.value=brushParams.roughness;
+        rough.oninput=e=>brushParams.roughness=parseFloat(e.target.value);
+        addSetting('roughness',rough);
+        const met=document.createElement('input'); met.type='range'; met.min=0; met.max=1; met.step=0.01; met.value=brushParams.metallic;
+        met.oninput=e=>brushParams.metallic=parseFloat(e.target.value);
+        addSetting('metallic',met);
+        const la=document.createElement('input'); la.type='checkbox'; la.checked=brushParams.lightAction;
+        la.onchange=e=>brushParams.lightAction=e.target.checked;
+        addSetting('light action',la);
+        const lc=document.createElement('input'); lc.type='color'; lc.value=brushParams.lightColor;
+        lc.oninput=e=>brushParams.lightColor=e.target.value;
+        addSetting('light color',lc);
+      }
+      break;
+    case 'crease':
+      {
+        const s=document.createElement('input'); s.type='range'; s.min=0.01; s.max=0.5; s.step=0.01; s.value=brushParams.strength;
+        s.oninput=e=>brushParams.strength=parseFloat(e.target.value);
+        addSetting('strength',s);
+        const r=document.createElement('input'); r.type='range'; r.min=0.01; r.max=0.5; r.step=0.01; r.value=brushParams.radius;
+        r.oninput=e=>brushParams.radius=parseFloat(e.target.value);
+        addSetting('radius',r);
+        const f=document.createElement('input'); f.type='checkbox'; f.checked=brushParams.forceDyntopo;
+        f.onchange=e=>brushParams.forceDyntopo=e.target.checked;
+        addSetting('force dyntopo',f);
+      }
+      break;
+    case 'CC0':
+      {
+        const i=document.createElement('input'); i.type='range'; i.min=0; i.max=1; i.step=0.01; i.value=brushParams.intensity;
+        i.oninput=e=>brushParams.intensity=parseFloat(e.target.value);
+        addSetting('intensity',i);
+      }
+      break;
+    case 'measure':
+    case 'transform':
+      // no special settings
+      break;
+  }
+}
+
+function buildBrushSelector(){
+  const sel=document.getElementById('brush-select');
+  Object.keys(brushes).forEach(key=>{
+    const opt=document.createElement('option');
+    opt.value=key; opt.textContent=brushes[key].display;
+    sel.appendChild(opt);
+  });
+  sel.value=currentBrush;
+  sel.onchange=e=>{currentBrush=e.target.value; updateBrushSettingsUI();};
+  updateBrushSettingsUI();
+}
+
+// utility: pretend to apply dyntopo
+function applyDyntopo(){
+  console.log('dyntopo applied (stub)');
+}
+
+// measurement helpers
+let measuring = false;
+let measurePoints = [];
+let measureLine = null;
+
+function finalizeMeasurement(){
+  if(measureLine){ scene.remove(measureLine); measureLine.geometry.dispose(); measureLine=null; }
+  if(measurePoints.length>1){
+    const geo=new THREE.BufferGeometry().setFromPoints(measurePoints);
+    const mat=new THREE.LineBasicMaterial({color:0xffff00});
+    measureLine=new THREE.Line(geo,mat);
+    scene.add(measureLine);
+    // place labels as sprites
+    measurePoints.forEach((p,i)=>{
+      const txt=new THREE.Sprite(new THREE.SpriteMaterial({
+        map: createTextTexture((i+1)+'cm'), transparent:true
+      }));
+      txt.position.copy(p).add(new THREE.Vector3(0,0.02,0));
+      txt.scale.set(0.2,0.1,1);
+      scene.add(txt);
+    });
+  }
+  measurePoints=[];
+}
+
+function createTextTexture(text){
+  const canvas=document.createElement('canvas');
+  canvas.width=256; canvas.height=128;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='white'; ctx.font='48px sans-serif'; ctx.fillText(text,10,60);
+  const tex=new THREE.CanvasTexture(canvas);
+  return tex;
+}
+
+
 // لمس متعدد
 const pointers = new Map();
 let lastPinchDistance = null;
 let isSculpting = false;
+let isDraggingMesh = false;
 
 function getPinchDistance(){
   const pts = Array.from(pointers.values());
@@ -53,8 +229,8 @@ function toNDCCoords(x,y){
   return {x:(x/window.innerWidth)*2-1, y:-(y/window.innerHeight)*2+1};
 }
 
-function sculptAt(x,y, strength=0.02, radius=0.12){
-  // raycast
+function sculptAt(x,y, strength=0.02, radius=0.12, direction=1){
+  // direction positive applies outward push, negative pulls
   const ndc = toNDCCoords(x,y);
   raycaster.setFromCamera(ndc, camera);
   const intersects = raycaster.intersectObject(mesh);
@@ -65,7 +241,7 @@ function sculptAt(x,y, strength=0.02, radius=0.12){
     const vx = pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
     const d = Math.hypot(vx-p.x, vy-p.y, vz-p.z);
     if(d<radius){
-      const fall = (1 - d/radius) * strength;
+      const fall = (1 - d/radius) * strength * direction;
       const nx = (vx - p.x), ny=(vy-p.y), nz=(vz-p.z);
       const len = Math.hypot(nx,ny,nz)||1;
       pos.setXYZ(i, vx + (nx/len)*fall, vy + (ny/len)*fall, vz + (nz/len)*fall);
@@ -76,19 +252,103 @@ function sculptAt(x,y, strength=0.02, radius=0.12){
   return true;
 }
 
+function applyBrush(x,y, isStart=false, dx=0, dy=0){
+  switch(currentBrush){
+    case 'clay':
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      break;
+    case 'inflate':
+      const dir = brushParams.negativeDyntopo?-1:1;
+      sculptAt(x,y,brushParams.strength,brushParams.radius,dir);
+      if(brushParams.negativeDyntopo) applyDyntopo();
+      break;
+    case 'drag':
+      // move vertices toward pointer direction
+      const ndc=toNDCCoords(x,y);
+      raycaster.setFromCamera(ndc,camera);
+      const hits=raycaster.intersectObject(mesh);
+      if(hits.length){
+        const p=hits[0].point;
+        const pos=mesh.geometry.attributes.position;
+        for(let i=0;i<pos.count;i++){
+          const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
+          const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
+          if(d<brushParams.radius){
+            pos.setXYZ(i, vx + dx*0.01, vy - dy*0.01, vz);
+          }
+        }
+        pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
+      }
+      break;
+    case 'move':
+      // similar a bit softer
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      break;
+    case 'paint':
+      if(isStart){
+        mesh.material.color.set(brushParams.color);
+        mesh.material.roughness = brushParams.roughness;
+        mesh.material.metalness = brushParams.metallic;
+        if(brushParams.lightAction){
+          mesh.material.emissive.set(brushParams.lightColor);
+        }
+      }
+      break;
+    case 'crease':
+      sculptAt(x,y,brushParams.strength*2,brushParams.radius,1);
+      if(brushParams.forceDyntopo) applyDyntopo();
+      break;
+    case 'CC0':
+      // jitter
+      const ndc2=toNDCCoords(x,y);
+      raycaster.setFromCamera(ndc2,camera);
+      const hits2=raycaster.intersectObject(mesh);
+      if(hits2.length){
+        const p=hits2[0].point;
+        const pos=mesh.geometry.attributes.position;
+        for(let i=0;i<pos.count;i++){
+          const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
+          const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
+          if(d<brushParams.radius){
+            const jitter=(Math.random()-0.5)*brushParams.intensity;
+            pos.setXYZ(i, vx + jitter, vy + jitter, vz + jitter);
+          }
+        }
+        pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
+      }
+      break;
+    case 'wire':
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      sculptAt(x,y,brushParams.strength/2,brushParams.radius/2,-1);
+      break;
+    case 'measure':
+      // tracking in pointermove
+      break;
+    case 'transform':
+      // handled in move events
+      break;
+  }
+}
+
 // Pointer events handle multi-touch and mouse
 renderer.domElement.addEventListener('pointerdown', (e)=>{
   renderer.domElement.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, {x:e.clientX, y:e.clientY, type:e.pointerType});
 
   if(pointers.size===1){
-    // test if touching mesh
     const ndc = toNDCCoords(e.clientX, e.clientY);
     raycaster.setFromCamera(ndc, camera);
     const hits = raycaster.intersectObject(mesh);
     isSculpting = hits.length>0;
     if(isSculpting){
-      sculptAt(e.clientX, e.clientY, 0.03, 0.12);
+      applyBrush(e.clientX, e.clientY, true);
+    }
+    if(currentBrush==='transform' && hits.length){
+      // begin transform
+      isDraggingMesh = true;
+    }
+    if(currentBrush==='measure' && hits.length){
+      measuring = true; measurePoints=[hits[0].point.clone()];
     }
   }
   if(pointers.size===2){
@@ -105,9 +365,20 @@ renderer.domElement.addEventListener('pointermove', (e)=>{
 
   if(pointers.size===1){
     if(isSculpting){
-      sculptAt(e.clientX, e.clientY, 0.015, 0.12);
+      applyBrush(e.clientX, e.clientY, false, dx, dy);
+    } else if(currentBrush==='transform' && isDraggingMesh){
+      // translate mesh according to pointer movement in screen space
+      const dir=new THREE.Vector3(dx/100, -dy/100,0);
+      mesh.position.add(dir);
+    } else if(measuring){
+      const ndc = toNDCCoords(e.clientX, e.clientY);
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObject(mesh);
+      if(hits.length){
+        measurePoints.push(hits[0].point.clone());
+      }
     } else {
-      // orbit: rotate using OrbitControls by simulating mouse
+      // orbit
       controls.rotateLeft(dx * 0.005);
       controls.rotateUp(dy * 0.005);
     }
@@ -116,9 +387,6 @@ renderer.domElement.addEventListener('pointermove', (e)=>{
     const newDist = getPinchDistance();
     if(lastPinchDistance!==null){
       const diff = newDist - lastPinchDistance;
-      // small diff -> interpret as pan when both fingers move same direction
-      const mvA = {x:pts[0].x - prev.x, y: pts[0].y - prev.y};
-      // simple zoom
       camera.position.addScaledVector(camera.getWorldDirection(new THREE.Vector3()), -diff*0.005);
     }
     lastPinchDistance = newDist;
@@ -129,7 +397,11 @@ renderer.domElement.addEventListener('pointerup', (e)=>{
   pointers.delete(e.pointerId);
   renderer.domElement.releasePointerCapture(e.pointerId);
   if(pointers.size<2) lastPinchDistance = null;
-  if(pointers.size===0) isSculpting = false;
+  if(pointers.size===0){
+    isSculpting = false;
+    isDraggingMesh = false;
+    if(measuring){ finalizeMeasurement(); measuring=false; }
+  }
 });
 
 window.addEventListener('resize', ()=>{
@@ -137,6 +409,9 @@ window.addEventListener('resize', ()=>{
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// initialize UI
+buildBrushSelector();
 
 function animate(){
   requestAnimationFrame(animate);
