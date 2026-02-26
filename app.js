@@ -451,6 +451,71 @@ window.addEventListener('resize', ()=>{
 
 // initialize UI
 buildBrushSelector();
+setupMenus();
+
+function setupMenus(){
+  document.querySelectorAll('#menu-bar .menu').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const name = btn.dataset.menu + '-menu';
+      document.querySelectorAll('.submenu').forEach(s=>{ if(s.id===name) s.style.display = (s.style.display==='block'? 'none':'block'); else s.style.display='none'; });
+    });
+  });
+  // file submenu actions
+  document.getElementById('file-menu').addEventListener('click', e=>{
+    const act = e.target.dataset.action;
+    if(!act) return;
+    handleFileAction(act);
+  });
+}
+
+function handleFileAction(action){
+  switch(action){
+    case 'new':
+      if(confirm('Are you sure you want to clear the object?')){
+        // reset mesh
+        mesh.geometry.dispose();
+        mesh.geometry = new THREE.SphereGeometry(1,128,128);
+      }
+      break;
+    case 'import':
+      const inp = document.createElement('input');
+      inp.type='file';
+      // allow many extensions
+      inp.accept = '.obj,.fbx,.glb,.gltf,.ply,.stl,.dae,.3ds,.blend,.x3d,.off,.3mf,.svg,.amf,.wrl,.x,.lwo,.lws,.ac,.ac3d,.ase,.cob,.x,.bvh,.vrml,.xsi,.dxf,.fbx,.gltf,.js,.json,.pbobjs,.ply,.prwm,.stl,.wrl';
+      inp.onchange = e=>{
+        const file = e.target.files[0];
+        if(!file) return;
+        alert('imported '+file.name+' (format:'+file.type+')');
+        // stub: real parsing would go here
+      };
+      inp.click();
+      break;
+    case 'export':
+      const fmt = prompt('Choose format (fbx,glb,ply,blend,obj):');
+      if(!fmt) break;
+      const bin = confirm('binary? OK=yes ASCII=no');
+      // stub: create simple OBJ for now
+      let data='';
+      if(fmt==='obj'){
+        const pos=mesh.geometry.attributes.position;
+        for(let i=0;i<pos.count;i++){
+          data += `v ${pos.getX(i)} ${pos.getY(i)} ${pos.getZ(i)}\n`;
+        }
+      } else {
+        data = 'exported '+fmt+' (binary='+bin+')';
+      }
+      const blob = new Blob([data],{type:'application/octet-stream'});
+      const url = URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download='model.'+fmt;
+      a.click();
+      URL.revokeObjectURL(url);
+      break;
+    case 'fix':
+      alert('Topological fix (stub)');
+      break;
+  }
+}
 
 function animate(){
   requestAnimationFrame(animate);

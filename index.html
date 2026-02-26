@@ -8,8 +8,30 @@
 </head>
 <body>
   <div id="ui">
-    <h1>FireBrush Web — نحت مباشر</h1>
+    <div id="menu-bar">
+      <div class="menu" data-menu="file">File</div>
+      <div class="menu" data-menu="edit">Edit</div>
+      <div class="menu" data-menu="window">Window</div>
+      <div class="menu" data-menu="sculpt">Sculpt</div>
+    </div>
     <div id="tips">إصبع واحد: نقش / خلفية = دوران · إصبعان: تحريك/تكبير</div>
+  </div>
+  <div id="menu-submenus">
+    <div class="submenu" id="file-menu">
+      <button data-action="new">New</button>
+      <button data-action="import">Import</button>
+      <button data-action="export">Export</button>
+      <button data-action="fix">Fix</button>
+    </div>
+    <div class="submenu" id="edit-menu">
+      <!-- future edit actions -->
+    </div>
+    <div class="submenu" id="window-menu">
+      <!-- window actions -->
+    </div>
+    <div class="submenu" id="sculpt-menu">
+      <!-- sculpt-specific actions -->
+    </div>
   </div>
   <div id="brush-controls">
     <label>فرشاة:
