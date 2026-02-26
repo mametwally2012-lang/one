@@ -48,9 +48,14 @@ const brushes = {
   crease: {display: 'crease'},
   CC0: {display: 'CC0'},
   wire: {display: 'wire'},
-  measure: {display: 'measure'}
+  measure: {display: 'measure'},
+  remove: {display: 'remove'},
+  'rigging prev': {display: 'rigging prev'},
+  add: {display: 'add'},
+  eye: {display: 'eye'}
 };
 let currentBrush = 'clay';
+let negativeMode = false;
 const brushParams = {
   strength: 0.02,
   radius: 0.12,
@@ -169,6 +174,14 @@ function buildBrushSelector(){
   });
   sel.value=currentBrush;
   sel.onchange=e=>{currentBrush=e.target.value; updateBrushSettingsUI();};
+  // negative mode toggle
+  const neg = document.createElement('input');
+  neg.type='checkbox'; neg.id='negative-toggle';
+  neg.onchange = e=>{ negativeMode = e.target.checked; };
+  const negLabel = document.createElement('label');
+  negLabel.textContent = 'negative mode';
+  negLabel.appendChild(neg);
+  sel.parentNode.appendChild(negLabel);
   updateBrushSettingsUI();
 }
 
@@ -253,36 +266,60 @@ function sculptAt(x,y, strength=0.02, radius=0.12, direction=1){
 }
 
 function applyBrush(x,y, isStart=false, dx=0, dy=0){
+  const sign = negativeMode ? -1 : 1;
   switch(currentBrush){
     case 'clay':
-      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1*sign);
       break;
     case 'inflate':
       const dir = brushParams.negativeDyntopo?-1:1;
-      sculptAt(x,y,brushParams.strength,brushParams.radius,dir);
+      sculptAt(x,y,brushParams.strength,brushParams.radius,dir*sign);
       if(brushParams.negativeDyntopo) applyDyntopo();
       break;
-    case 'drag':
-      // move vertices toward pointer direction
+    case 'remove':
+      sculptAt(x,y,brushParams.strength,brushParams.radius,-1*sign);
+      break;
+    case 'rigging prev':
+      // move entire mesh toward pointer similar to drag but stronger
       const ndc=toNDCCoords(x,y);
       raycaster.setFromCamera(ndc,camera);
       const hits=raycaster.intersectObject(mesh);
       if(hits.length){
-        const p=hits[0].point;
-        const pos=mesh.geometry.attributes.position;
-        for(let i=0;i<pos.count;i++){
-          const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
-          const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
-          if(d<brushParams.radius){
-            pos.setXYZ(i, vx + dx*0.01, vy - dy*0.01, vz);
+        mesh.position.add(new THREE.Vector3(dx*0.02, -dy*0.02,0));
+      }
+      break;
+    case 'add':
+      // simulate subdivision by reassigning geometry and forcing dyntopo
+      applyDyntopo();
+      break;
+    case 'eye':
+      sculptAt(x,y,brushParams.strength,brushParams.radius,-1);
+      brushParams.radius = Math.max(0.01, brushParams.radius - 0.1);
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      break;
+    case 'drag':
+      // move vertices toward pointer direction
+      {
+        const ndc=toNDCCoords(x,y);
+        raycaster.setFromCamera(ndc,camera);
+        const hits=raycaster.intersectObject(mesh);
+        if(hits.length){
+          const p=hits[0].point;
+          const pos=mesh.geometry.attributes.position;
+          for(let i=0;i<pos.count;i++){
+            const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
+            const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
+            if(d<brushParams.radius){
+              pos.setXYZ(i, vx + dx*0.01*sign, vy - dy*0.01*sign, vz);
+            }
           }
+          pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
         }
-        pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
       }
       break;
     case 'move':
       // similar a bit softer
-      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1*sign);
       break;
     case 'paint':
       if(isStart){
@@ -295,31 +332,33 @@ function applyBrush(x,y, isStart=false, dx=0, dy=0){
       }
       break;
     case 'crease':
-      sculptAt(x,y,brushParams.strength*2,brushParams.radius,1);
+      sculptAt(x,y,brushParams.strength*2,brushParams.radius,1*sign);
       if(brushParams.forceDyntopo) applyDyntopo();
       break;
     case 'CC0':
       // jitter
-      const ndc2=toNDCCoords(x,y);
-      raycaster.setFromCamera(ndc2,camera);
-      const hits2=raycaster.intersectObject(mesh);
-      if(hits2.length){
-        const p=hits2[0].point;
-        const pos=mesh.geometry.attributes.position;
-        for(let i=0;i<pos.count;i++){
-          const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
-          const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
-          if(d<brushParams.radius){
-            const jitter=(Math.random()-0.5)*brushParams.intensity;
-            pos.setXYZ(i, vx + jitter, vy + jitter, vz + jitter);
+      {
+        const ndc2=toNDCCoords(x,y);
+        raycaster.setFromCamera(ndc2,camera);
+        const hits2=raycaster.intersectObject(mesh);
+        if(hits2.length){
+          const p=hits2[0].point;
+          const pos=mesh.geometry.attributes.position;
+          for(let i=0;i<pos.count;i++){
+            const vx=pos.getX(i), vy=pos.getY(i), vz=pos.getZ(i);
+            const d=Math.hypot(vx-p.x,vy-p.y,vz-p.z);
+            if(d<brushParams.radius){
+              const jitter=(Math.random()-0.5)*brushParams.intensity;
+              pos.setXYZ(i, vx + jitter, vy + jitter, vz + jitter);
+            }
           }
+          pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
         }
-        pos.needsUpdate=true; mesh.geometry.computeVertexNormals();
       }
       break;
     case 'wire':
-      sculptAt(x,y,brushParams.strength,brushParams.radius,1);
-      sculptAt(x,y,brushParams.strength/2,brushParams.radius/2,-1);
+      sculptAt(x,y,brushParams.strength,brushParams.radius,1*sign);
+      sculptAt(x,y,brushParams.strength/2,brushParams.radius/2,-1*sign);
       break;
     case 'measure':
       // tracking in pointermove
