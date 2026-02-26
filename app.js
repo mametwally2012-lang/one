@@ -56,6 +56,115 @@ const brushes = {
 };
 let currentBrush = 'clay';
 let negativeMode = false;
+
+// Undo/Redo system
+const undoStack = [];
+const redoStack = [];
+const MAX_UNDO_STATES = 10;
+
+function saveState(){
+  const posAttr = mesh.geometry.attributes.position;
+  const posData = new Float32Array(posAttr.array);
+  undoStack.push({positions: posData});
+  redoStack.length = 0;
+  if(undoStack.length > 100) checkMemoryPressure();
+}
+
+function undo(){
+  if(undoStack.length <= 1) return;
+  const curr = undoStack.pop();
+  redoStack.push(curr);
+  const prev = undoStack[undoStack.length-1];
+  const posAttr = mesh.geometry.attributes.position;
+  posAttr.array.set(prev.positions);
+  posAttr.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+}
+
+function redo(){
+  if(redoStack.length === 0) return;
+  const state = redoStack.pop();
+  undoStack.push(state);
+  const posAttr = mesh.geometry.attributes.position;
+  posAttr.array.set(state.positions);
+  posAttr.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+}
+
+function checkMemoryPressure(){
+  if(undoStack.length > MAX_UNDO_STATES){
+    while(undoStack.length > MAX_UNDO_STATES){
+      undoStack.shift();
+    }
+  }
+}
+
+function getMemoryUsage(){
+  const info = renderer.info.memory;
+  const vramMB = (info.geometries + info.textures) * 0.01;
+  return {vram: vramMB};
+}
+
+function updateMemoryDisplay(){
+  const mem = getMemoryUsage();
+  let label = document.getElementById('memory-display');
+  if(!label){
+    label = document.createElement('div');
+    label.id = 'memory-display';
+    label.style.cssText = 'position:absolute;top:35px;left:8px;color:#fff;font-size:0.8em;background:rgba(0,0,0,0.3);padding:4px';
+    document.getElementById('ui').appendChild(label);
+  }
+  label.textContent = `Memory: ${undoStack.length} states, VRAM: ${mem.vram.toFixed(1)}MB`;
+}
+
+function addCube(){
+  const geom = new THREE.BoxGeometry(1,1,1,8,8,8);
+  const mat = new THREE.MeshStandardMaterial({color:0x88ccff});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
+function addSphere(){
+  const geom = new THREE.SphereGeometry(0.8, 32, 32);
+  const mat = new THREE.MeshStandardMaterial({color:0xff88cc});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
+function addCylinder(){
+  const geom = new THREE.CylinderGeometry(0.6, 0.6, 1.5, 24, 8);
+  const mat = new THREE.MeshStandardMaterial({color:0x88ff88});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
+function addTorus(){
+  const geom = new THREE.TorusGeometry(0.8, 0.3, 16, 100);
+  const mat = new THREE.MeshStandardMaterial({color:0xffcc88});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
+function addCone(){
+  const geom = new THREE.ConeGeometry(0.7, 1.5, 24, 8);
+  const mat = new THREE.MeshStandardMaterial({color:0xff8888});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
+function addPyramid(){
+  const geom = new THREE.ConeGeometry(0.8, 1, 4, 4);
+  const mat = new THREE.MeshStandardMaterial({color:0xcc88ff});
+  const newMesh = new THREE.Mesh(geom, mat);
+  newMesh.position.set(0, 0, 0);
+  scene.add(newMesh);
+}
+
 const brushParams = {
   strength: 0.02,
   radius: 0.12,
@@ -267,6 +376,7 @@ function sculptAt(x,y, strength=0.02, radius=0.12, direction=1){
 
 function applyBrush(x,y, isStart=false, dx=0, dy=0){
   const sign = negativeMode ? -1 : 1;
+  if(isStart) saveState();
   switch(currentBrush){
     case 'clay':
       sculptAt(x,y,brushParams.strength,brushParams.radius,1*sign);
@@ -466,6 +576,41 @@ function setupMenus(){
     if(!act) return;
     handleFileAction(act);
   });
+  // edit submenu actions
+  document.getElementById('edit-menu').addEventListener('click', e=>{
+    const act = e.target.dataset.action;
+    if(!act) return;
+    handleEditAction(act);
+  });
+}
+
+function handleEditAction(action){
+  switch(action){
+    case 'undo':
+      undo();
+      break;
+    case 'redo':
+      redo();
+      break;
+    case 'add-cube':
+      addCube();
+      break;
+    case 'add-sphere':
+      addSphere();
+      break;
+    case 'add-cylinder':
+      addCylinder();
+      break;
+    case 'add-torus':
+      addTorus();
+      break;
+    case 'add-cone':
+      addCone();
+      break;
+    case 'add-pyramid':
+      addPyramid();
+      break;
+  }
 }
 
 function handleFileAction(action){
@@ -520,6 +665,7 @@ function handleFileAction(action){
 function animate(){
   requestAnimationFrame(animate);
   controls.update();
+  updateMemoryDisplay();
   renderer.render(scene, camera);
 }
 animate();
