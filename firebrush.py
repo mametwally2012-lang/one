@@ -6,7 +6,11 @@ import numpy as np
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 import dearpygui.dearpygui as dpg
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
+import psutil
+import os
+import gc
+import json
 
 # --- 1. الهياكل البيانية (C-Structs) ---
 class Vertex(ctypes.Structure):
@@ -91,31 +95,103 @@ class FireBrushCore:
             vec3 next = vertices[id+1].position.xyz;
             vertices[id].position.xyz = mix(vertices[id].position.xyz, (prev + next) * 0.5, 0.1);
         }"""
+        
+        # [Vertex Shader] - رسم المجسمات
+        vs_source = """#version 430 core
+        layout(location = 0) in vec4 position;
+        layout(location = 1) in vec4 normal;
+        
+        uniform mat4 view;
+        uniform mat4 projection;
+        
+        out vec3 fragPos;
+        out vec3 fragNormal;
+        
+        void main() {
+            fragPos = position.xyz;
+            fragNormal = normal.xyz;
+            gl_Position = projection * view * position;
+        }"""
+        
+        # [Fragment Shader] - الإضاءة والألوان
+        fs_source = """#version 430 core
+        in vec3 fragPos;
+        in vec3 fragNormal;
+        
+        uniform vec4 baseColor;
+        uniform float metallic;
+        uniform float roughness;
+        
+        out vec4 FragColor;
+        
+        void main() {
+            // إضاءة بسيطة
+            vec3 light = normalize(vec3(1.0, 1.0, 1.0));
+            float diff = max(dot(normalize(fragNormal), light), 0.0);
+            vec3 result = baseColor.xyz * (0.3 + 0.7 * diff);
+            FragColor = vec4(result, baseColor.a);
+        }"""
 
         try:
             self.compute_program = compileProgram(compileShader(cs_source, GL_COMPUTE_SHADER))
             self.relax_compute_shader = compileProgram(compileShader(relax_source, GL_COMPUTE_SHADER))
+            
+            # محاولة تجميع شيدرات الرسم (اختيارية)
+            try:
+                vs = compileShader(vs_source, GL_VERTEX_SHADER)
+                fs = compileShader(fs_source, GL_FRAGMENT_SHADER)
+                self.render_program = compileProgram(vs, fs)
+            except:
+                self.render_program = None
+                print("[Shader] تنبيه: لم يتم تجميع شيدرات الرسم")
         except Exception as e:
             print(f"Shader Compilation Error: {e}")
 
 # --- 4. الأنظمة الفرعية (LOD, Material, Brush, Window) ---
 class NaniteLODEngine:
+    """نظام مستويات التفاصيل - بسيط وفعّال"""
     def __init__(self, core):
         self.core = core
-        # (كود شيدر LOD الذي قدمته في الجزء 3 يتم تعريفه هنا بنفس الطريقة)
+        self.current_lod = 0
+    
+    def calculate_lod(self, camera_distance):
+        """تحديد مستوى التفاصيل"""
+        if camera_distance < 5:
+            return 100000
+        elif camera_distance < 15:
+            return 50000
+        else:
+            return 25000
 
 class PearlMaterialSystem:
+    """نظام المواد البسيط"""
     def __init__(self):
-        # (كود شيدر Pearl MatCap من الجزء 4 يتم تعريفه هنا)
-        pass
+        self.current_material = "Clay"
+        self.materials = {
+            "Clay": (0.8, 0.7, 0.6, 1.0),
+            "Stone": (0.5, 0.5, 0.5, 1.0),
+            "Metal": (0.9, 0.9, 0.9, 1.0),
+        }
+    
+    def get_material(self, name):
+        return self.materials.get(name, self.materials["Clay"])
 
 class SculptBrushSystem:
     def __init__(self, core_engine):
         self.engine = core_engine
-        self.brush_type = "Standard"
+        self.brush_type = "Clay"
         self.strength = 1.0
         self.radius = 0.1
         self.relax_enabled = False
+        
+        # نظام بسيط: 5 فرش فقط
+        self.brushes = {
+            "Clay": {"strength_mult": 1.0, "icon": "🔨"},
+            "Smooth": {"strength_mult": 0.5, "icon": "🎨"},
+            "Grab": {"strength_mult": 0.8, "icon": "✋"},
+            "Crease": {"strength_mult": 1.5, "icon": "📐"},
+            "Flatten": {"strength_mult": 0.9, "icon": "📏"}
+        }
 
     def apply_relax(self):
         if self.relax_enabled and self.engine.relax_compute_shader:
@@ -123,19 +199,50 @@ class SculptBrushSystem:
             glDispatchCompute((self.engine.max_verts // 256), 1, 1)
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT)
 
-    def open_brush_library(self):
-        with dpg.window(label="Brush Library", modal=True, width=400, height=300):
-            dpg.add_button(label="Clay", width=-1, callback=lambda: self.set_brush("Clay"))
-            dpg.add_button(label="Grab", width=-1, callback=lambda: self.set_brush("Grab"))
-            dpg.add_button(label="Close", callback=lambda: dpg.delete_item(dpg.last_container()))
-
-    def set_brush(self, name): self.brush_type = name
+    def set_brush(self, name):
+        if name in self.brushes:
+            self.brush_type = name
+            mult = self.brushes[name]["strength_mult"]
+            icon = self.brushes[name]["icon"]
+            print(f"[Brush] {icon} تم تفعيل: {name} (x{mult})")
 
 class FireBrushWindowManager:
-    def __init__(self, core):
+    def __init__(self):
         self.core = core
         self.ui_visible = True
         self.shortcuts_enabled = False
+        self.undo_stack = []
+        self.redo_stack = []
+        self.max_undo_steps = 20
+
+    def save_undo_state(self):
+        """حفظ حالة النموذج الحالية للـ undo"""
+        if len(self.undo_stack) >= self.max_undo_steps:
+            self.undo_stack.pop(0)
+        # في تطبيق حقيقي يتم حفظ نسخة من البياناتglBindBuffer(GL_COPY_READ_BUFFER, self.core.ssbo)
+        # glBindBuffer(GL_COPY_WRITE_BUFFER, backup_buffer)
+        # glCopyBufferSubData(...)
+        self.undo_stack.append("checkpoint")
+        self.redo_stack.clear()
+        print("[Undo] حفظ نقطة تفتيش")
+
+    def undo(self):
+        """التراجع عن آخر تعديل"""
+        if self.undo_stack:
+            state = self.undo_stack.pop()
+            self.redo_stack.append(state)
+            print("[Undo] تراجع ✓")
+        else:
+            print("[Undo] لا توجد حالات للتراجع عنها")
+
+    def redo(self):
+        """إعادة آخر تعديل"""
+        if self.redo_stack:
+            state = self.redo_stack.pop()
+            self.undo_stack.append(state)
+            print("[Redo] إعادة ✓")
+        else:
+            print("[Redo] لا توجد حالات للإعادة")
 
     def toggle_interface(self):
         self.ui_visible = not self.ui_visible
@@ -178,85 +285,35 @@ if __name__ == "__main__":
     # dpg.start_dearpygui() # تفعيل هذا السطر عند اكتمال حلقة الرسم
     dpg.destroy_context()
     glfw.terminate()
-      import psutil
-import os
-import gc
-import numpy as np
-import glm
-from OpenGL.GL import *
-import dearpygui.dearpygui as dpg
-from tkinter import filedialog, messagebox
 
 # --- [الجزء #7 و #8 و #9 المدمج]: نظام الفرش المتقدمة، التلوين، و Dyntopo ---
 class AdvancedSculptStudio:
+    """نظام النحت المتقدم - بسيط وسهل"""
     def __init__(self, core):
         self.engine = core
         self.current_tool = "Clay"
         
-        # إعدادات PBR و Skin (الجزء #8)
-        self.paint_color = [1.0, 1.0, 1.0, 1.0]
-        self.metallic = 0.0
-        self.roughness = 0.5
-        self.negative_mode = False
-        
-        # إعدادات Dyntopo (الجزء #9 المعدل)
+        # الإعدادات الأساسية فقط
+        self.strength = 1.0
+        self.radius = 0.1
         self.dyntopo_enabled = True
-        self.poly_rate = 10 # من -100 إلى 100
-        self.light_sculpt = False
-        self.sculpt_color = [1.0, 0.8, 0.0, 1.0]
-
-        # أدوات القياس والتحويل
-        self.is_measuring = False
-        self.measure_points = []
+        self.relax_enabled = False
+        
+        # نظام الفرش البسيط
+        self.brushes = {
+            "Clay": {"strength_mult": 1.0, "icon": "🔨"},
+            "Smooth": {"strength_mult": 0.5, "icon": "🎨"},
+            "Grab": {"strength_mult": 0.8, "icon": "✋"},
+            "Crease": {"strength_mult": 1.5, "icon": "📐"},
+            "Flatten": {"strength_mult": 0.9, "icon": "📏"}
+        }
 
     def set_tool(self, name):
-        self.current_tool = name
-        # تفعيل الدقة العالية لفرش معينة تلقائياً
-        if name in ["Inflate", "Smooth", "CC0"]:
-            self.dyntopo_enabled = True
-        print(f"[FireBrush] Active Tool: {name}")
-
-    def open_studio_window(self):
-        """نافذة Studio الشاملة لجميع الأدوات المتقدمة"""
-        if dpg.does_item_exist("StudioWin"): dpg.delete_item("StudioWin")
-        
-        with dpg.window(label="FireBrush Advanced Studio", tag="StudioWin", width=500, height=650):
-            with dpg.tab_bar():
-                # تبويب الفرش والأدوات المتقدمة (#7)
-                with dpg.tab(label="Tools & Brushes"):
-                    with dpg.group(horizontal=True):
-                        with dpg.child_window(width=230, height=400):
-                            dpg.add_text("Sculpting", color=(0, 255, 255))
-                            dpg.add_button(label="Clay (Safe)", width=-1, callback=lambda: self.set_tool("Clay"))
-                            dpg.add_button(label="Inflate (Dyntopo)", width=-1, callback=lambda: self.set_tool("Inflate"))
-                            dpg.add_button(label="Smooth (+Poly)", width=-1, callback=lambda: self.set_tool("Smooth"))
-                            dpg.add_button(label="Crease", width=-1, callback=lambda: self.set_tool("Crease"))
-                            dpg.add_separator()
-                            dpg.add_text("Movement")
-                            dpg.add_button(label="Drag (Path)", width=-1, callback=lambda: self.set_tool("Drag"))
-                            dpg.add_button(label="Move (Vector)", width=-1, callback=lambda: self.set_tool("Move"))
-                        
-                        with dpg.child_window(width=230, height=400):
-                            dpg.add_text("Advanced", color=(255, 100, 0))
-                            dpg.add_button(label="Sculpt Rig", width=-1, callback=lambda: self.set_tool("SculptRig"))
-                            dpg.add_button(label="Transform (Gizmo)", width=-1, callback=lambda: self.set_tool("Transform"))
-                            dpg.add_button(label="Measure Tool (cm)", width=-1, callback=lambda: self.set_tool("Measure"))
-                            dpg.add_separator()
-                            dpg.add_text("Organic")
-                            dpg.add_button(label="CC0 (Skin Surface)", width=-1, callback=lambda: self.set_tool("CC0"))
-                            dpg.add_button(label="Kill (Flatten)", width=-1, callback=lambda: self.set_tool("Kill"))
-
-                # تبويب Dyntopo والتلوين (#8 & #9)
-                with dpg.tab(label="Dyntopo & PBR"):
-                    dpg.add_text("DYNAMIC TOPOLOGY", color=(255, 255, 0))
-                    dpg.add_checkbox(label="Enable Dyntopo", default_value=True, callback=lambda s, a: setattr(self, 'dyntopo_enabled', a))
-                    dpg.add_slider_int(label="Poly Rate (+/-)", default_value=10, min_value=-100, max_value=100, callback=lambda s, a: setattr(self, 'poly_rate', a))
-                    
-                    dpg.add_separator()
-                    dpg.add_text("PBR PAINT & LIGHT", color=(0, 255, 100))
-                    dpg.add_color_picker(label="Base Color", default_value=self.paint_color, callback=lambda s, a: setattr(self, 'paint_color', a))
-                    dpg.add_checkbox(label="Light with Sculpt", callback=lambda s, a: setattr(self, 'light_sculpt', a))
-                    dpg.add_checkbox(label="NEGATIVE MODE", callback=lambda s, a: setattr(self, 'negative_mode', a))
+        """تعيين الأداة الحالية"""
+        if name in self.brushes:
+            self.current_tool = name
+            info = self.brushes[name]
+            print(f"[Sculpt] {info['icon']} {name} جاهز للاستخدام")
 
 # --- [الجزء #10 و #11]: الحماية، القناع، والذاكرة ---
 class FireBrushGuardian:
@@ -287,18 +344,7 @@ class FireBrushGuardian:
             glUniform1i(glGetUniformLocation(self.core.compute_program, "useBackfaceMask"), self.use_backface_mask)
 
 # --- دالة الربط النهائي للواجهة ---
-def build_advanced_ui_system(app):
-    app.studio = AdvancedSculptStudio(app.core)
-    app.guardian = FireBrushGuardian(app.core)
-
-    with dpg.viewport_menu_bar():
-        with dpg.menu(label="Brushes"):
-            dpg.add_menu_item(label="Open Studio...", callback=app.studio.open_studio_window)
-import glm
-import pyassimp
-from tkinter import filedialog, messagebox
-
-# --- [الجزء #13]: نظام الكاميرا الاحترافي (Orbit, Pan, Zoom) ---
+# --- نظام الكاميرا الاحترافي (Orbit, Pan, Zoom) ---
 class FireBrushCamera:
     def __init__(self):
         self.target = glm.vec3(0, 0, 0)
@@ -350,52 +396,387 @@ class SceneManager:
                 # تصفير الـ SSBO
                 pass
         elif action == "IMPORT":
-            path = filedialog.askopenfilename() # تدعم +50 صيغة عبر Assimp
-            if path: print(f"Importing {path}...")
+            # دعم صيغ متعددة
+            filetypes = [
+                ("جميع الملفات المدعومة", "*.obj *.fbx *.gltf *.glb *.ply *.stl"),
+                ("Wavefront OBJ", "*.obj"),
+                ("FBX Model", "*.fbx"),
+                ("glTF", "*.gltf *.glb"),
+                ("PLY", "*.ply"),
+                ("STL", "*.stl"),
+                ("جميع الملفات", "*.*")
+            ]
+            path = filedialog.askopenfilename(filetypes=filetypes)
+            if path:
+                ext = os.path.splitext(path)[1].lower()
+                print(f"📂 جاري استيراد {ext}: {os.path.basename(path)}...")
+                # يمكن إضافة معالج فعلي لاحقاً
         elif action == "EXPORT":
-            path = filedialog.asksaveasfilename(defaultextension=".obj")
-            if path: print(f"Exporting to {path}...")
+            # صيغ التصدير المدعومة
+            filetypes = [
+                ("Wavefront OBJ", "*.obj"),
+                ("FBX Model", "*.fbx"),
+                ("glTF Binary", "*.glb"),
+                ("PLY", "*.ply"),
+                ("STL", "*.stl"),
+            ]
+            path = filedialog.asksaveasfilename(filetypes=filetypes, defaultextension=".obj")
+            if path:
+                ext = os.path.splitext(path)[1].lower()
+                print(f"💾 جاري تصدير إلى {ext}: {os.path.basename(path)}...")
+                # يمكن إضافة معالج فعلي لاحقاً
 
 # --- بناء القوائم العلوية الشاملة (The Final UI Header) ---
-def build_ui_header(app):
-    sm = SceneManager(app.core)
-    app.scene = sm # ربط المشهد بالتطبيق
-    
-    with dpg.viewport_menu_bar():
-        with dpg.menu(label="File"):
-            dpg.add_menu_item(label="New Project", callback=lambda: sm.file_operations("NEW"))
-            dpg.add_menu_item(label="Import (+50 Formats)", callback=lambda: sm.file_operations("IMPORT"))
-            dpg.add_menu_item(label="Export...", callback=lambda: sm.file_operations("EXPORT"))
-            dpg.add_separator()
-            dpg.add_menu_item(label="FIX Topology", callback=lambda: print("Fixing..."))
 
-        with dpg.menu(label="Edit"):
-            with dpg.menu(label="Add Primitive"):
-                for p in ["Sphere", "Cube", "Cylinder", "Torus", "Pyramid", "Cone"]:
-                    dpg.add_menu_item(label=f"Add {p}", callback=lambda s, a, user_data=p: sm.add_primitive(user_data))
-            dpg.add_separator()
-            dpg.add_menu_item(label="Undo (Ctrl+Z)")
-            dpg.add_menu_item(label="Redo (Ctrl+Y)")
-
-        with dpg.menu(label="Window"):
-            dpg.add_checkbox(label="Show Grid", default_value=True, callback=lambda s, a: setattr(sm, 'show_grid', a))
-            dpg.add_color_edit(label="Background Color", default_value=sm.bg_color, callback=lambda s, a: setattr(sm, 'bg_color', a))
 class AndroidWindowManager:
+    """إدارة النوافذ البسيطة"""
     def __init__(self):
         self.window_stack = []
+        self.undo_stack = []
+        self.redo_stack = []
+        self.max_undo_steps = 20
 
-    def create_mobile_window(self, title, tag, width=350, height=500):
-        """إنشاء نافذة بمواصفات أندرويد: أزرار كبيرة وزر إغلاق [X]"""
-        if dpg.does_item_exist(tag): dpg.show_item(tag)
-        else:
-            with dpg.window(label=title, tag=tag, width=width, height=height, 
-                            no_collapse=True, no_resize=True):
-                # شريط الإغلاق العلوي للأندرويد
-                with dpg.group(horizontal=True):
-                    dpg.add_button(label=" [ X ] ", callback=lambda: dpg.hide_item(tag), 
-                                   color=(200, 50, 50), width=60, height=40)
-                    dpg.add_text(f"  {title}", color=(255, 255, 255))
-                
+    def save_undo_state(self):
+        """حفظ حالة النموذج الحالية"""
+        if len(self.undo_stack) >= self.max_undo_steps:
+            self.undo_stack.pop(0)
+        self.undo_stack.append("checkpoint")
+        self.redo_stack.clear()
+
+    def undo(self):
+        """التراجع"""
+        if self.undo_stack:
+            state = self.undo_stack.pop()
+            self.redo_stack.append(state)
+            print("[✓] تراجع")
+
+    def redo(self):
+        """إعادة"""
+        if self.redo_stack:
+            state = self.redo_stack.pop()
+            self.undo_stack.append(state)
+            print("[✓] إعادة")
+
+# --- التطبيق الرئيسي الكامل مع حلقة الرسم ---
+class FireBrushApplication:
+    def __init__(self):
+        if not glfw.init():
+            print("[ERROR] فشل تهيئة GLFW")
+            sys.exit(1)
+        
+        # إعدادات النافذة
+        glfw.window_hint(glfw.VISIBLE, True)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 4)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        
+        self.window = glfw.create_window(1280, 720, "FireBrush Studio", None, None)
+        if not self.window:
+            print("[ERROR] فشل إنشاء النافذة")
+            glfw.terminate()
+            sys.exit(1)
+        
+        glfw.make_context_current(self.window)
+        glfw.set_input_mode(self.window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+        
+        # المتغيرات
+        self.running = True
+        self.last_x, self.last_y = 640, 360
+        self.sculpting = False
+        self.orbiting = False
+        self.last_sculpt_time = 0
+        
+        # المحركات
+        self.core = FireBrushCore()
+        self.scene = SceneManager(self.core)
+        self.studio = AdvancedSculptStudio(self.core)
+        self.guardian = FireBrushGuardian(self.core)
+        self.window_mgr = FireBrushWindowManager(self.core)
+        
+        # الواجهة
+        dpg.create_context()
+        self.setup_ui()
+        dpg.create_viewport(title='FireBrush Viewport', width=1280, height=720)
+        dpg.setup_dearpygui()
+        dpg.show_viewport()
+        
+        # ربط الإدخال
+        glfw.set_cursor_pos_callback(self.window, self.mouse_callback)
+        glfw.set_mouse_button_callback(self.window, self.mouse_button_callback)
+        glfw.set_key_callback(self.window, self.key_callback)
+        
+        # Android touch-specific setup if running on Android
+        if sys.platform.startswith('linux') and 'ANDROID_ROOT' in os.environ:
+            # GLFW doesn't expose multitouch API; in a real Android build
+            # we'd integrate with JNI or use a specialized touch library.
+            # Here we stub handlers for demonstration.
+            self.touches = {}          # id -> (x, y)
+            self.last_distance = None
+            self.pan_start = None
+            print("[Android] touch system enabled")
+        
+        print("[FireBrush] التطبيق جاهز للعمل ✅")
+
+    def setup_ui(self):
+        """واجهة بسيطة وواضحة - بدون تعقيدات"""
+        with dpg.viewport_menu_bar():
+            with dpg.menu(label="📁 ملف"):
+                dpg.add_menu_item(label="🆕 جديد", callback=self.new_project)
+                dpg.add_menu_item(label="📂 استيراد", callback=self.import_model)
+                dpg.add_menu_item(label="💾 تصدير", callback=self.export_model)
                 dpg.add_separator()
-                # هنا نضع محتوى النافذة (فرش، تلوين، إلخ)
-  
+                dpg.add_menu_item(label="❌ خروج", callback=lambda: setattr(self, 'running', False))
+            
+            with dpg.menu(label="🎨 الفرش"):
+                for brush_name, brush_info in self.studio.brushes.items():
+                    icon = brush_info["icon"]
+                    dpg.add_menu_item(label=f"{icon} {brush_name}", 
+                                     callback=lambda s, a, name=brush_name: self.studio.set_brush(name))
+            
+            with dpg.menu(label="⚙️ الإعدادات"):
+                dpg.add_slider_float(label="💪 قوة", default_value=1.0, min_value=0.1, max_value=5.0,
+                                    callback=lambda s, a: setattr(self.studio, 'strength', a))
+                dpg.add_slider_float(label="🔵 حجم", default_value=0.1, min_value=0.05, max_value=2.0,
+                                    callback=lambda s, a: setattr(self.studio, 'radius', a))
+                dpg.add_checkbox(label="🧹 تمويه تلقائي",
+                                callback=lambda s, a: setattr(self.studio, 'relax_enabled', a))
+            
+            with dpg.menu(label="👁️ العرض"):
+                dpg.add_checkbox(label="شبكة", default_value=True,
+                                callback=lambda s, a: setattr(self.scene, 'show_grid', a))
+                dpg.add_color_edit(label="خلفية", default_value=self.scene.bg_color,
+                                  callback=lambda s, a: setattr(self.scene, 'bg_color', a))
+
+    def mouse_callback(self, window, xpos, ypos):
+        """معالجة حركة الماوس/لمس (Android)"""
+        dx = xpos - self.last_x
+        dy = ypos - self.last_y
+        
+        # Android multitouch gestures
+        if hasattr(self, 'touches') and self.touches:
+            # سنعالج تحركات اللمس يدويًا عبر callback آخر
+            pass
+        else:
+            # دوران بـ Alt+LMB
+            if self.orbiting:
+                self.scene.camera.update_orbit(dx, dy)
+            # نحت بـ LMB عادي
+            elif self.sculpting:
+                pass
+        self.last_x, self.last_y = xpos, ypos
+
+    def mouse_button_callback(self, window, button, action, mods):
+        """معالجة أزرار الماوس"""
+        import time
+        
+        # Alt + LMB للدوران
+        if button == glfw.MOUSE_BUTTON_LEFT and (mods & glfw.MOD_ALT):
+            if action == glfw.PRESS:
+                self.orbiting = True
+            elif action == glfw.RELEASE:
+                self.orbiting = False
+        
+        # LMB عادي للنحت
+        elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
+            self.sculpting = True
+            self.last_sculpt_time = time.time()
+            self.window_mgr.save_undo_state()
+        elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
+            self.sculpting = False
+        
+        # عجلة التمرير للتكبير
+        if button == glfw.MOUSE_BUTTON_MIDDLE and action == glfw.PRESS:
+            self.scene.camera.update_zoom(1.0)
+
+    def key_callback(self, window, key, scancode, action, mods):
+        """معالجة لوحة المفاتيح"""
+        if action != glfw.PRESS:
+            return
+        
+        if key == glfw.KEY_ESCAPE:
+            self.running = False
+        elif key == glfw.KEY_SPACE:
+            self.studio.set_tool("Smooth")
+        elif key == glfw.KEY_G:
+            self.studio.set_tool("Grab")
+        elif key == glfw.KEY_R:
+            self.studio.relax_enabled = not self.studio.relax_enabled
+            print(f"[Relax] {'✅ فعّل' if self.studio.relax_enabled else '❌ عطّل'}")
+        elif key == glfw.KEY_Z and (mods & glfw.MOD_CONTROL):
+            self.window_mgr.undo()
+        elif key == glfw.KEY_Y and (mods & glfw.MOD_CONTROL):
+            self.window_mgr.redo()
+        elif key == glfw.KEY_S and (mods & glfw.MOD_CONTROL):
+            print("[Save] حفظ نقطة تفتيش...")
+
+    # --- Android touch gesture helper methods ---
+    def android_touch_begin(self, touch_id, x, y):
+        # touch_id is a platform-specific identifier
+        self.touches[touch_id] = (x, y)
+        if len(self.touches) == 1:
+            # first finger: decide later in move
+            self.single_touch_active = True
+        elif len(self.touches) == 2:
+            pts = list(self.touches.values())
+            self.last_distance = glm.distance(glm.vec2(*pts[0]), glm.vec2(*pts[1]))
+            self.pan_start = ((pts[0][0]+pts[1][0])/2, (pts[0][1]+pts[1][1])/2)
+
+    def android_touch_move(self, touch_id, x, y):
+        if touch_id not in self.touches:
+            return
+        prev = self.touches[touch_id]
+        self.touches[touch_id] = (x, y)
+        if len(self.touches) == 1:
+            # single finger; choose orbit or sculpt based on single_touch_active
+            if self.single_touch_active:
+                # when touching mesh, sculpt
+                self.sculpting = True
+            else:
+                self.scene.camera.update_orbit(x - prev[0], y - prev[1])
+        elif len(self.touches) == 2:
+            pts = list(self.touches.values())
+            dist = glm.distance(glm.vec2(*pts[0]), glm.vec2(*pts[1]))
+            if self.last_distance is not None:
+                if abs(dist - self.last_distance) < 5:
+                    # pan
+                    dx = ((pts[0][0]+pts[1][0])/2) - self.pan_start[0]
+                    dy = ((pts[0][1]+pts[1][1])/2) - self.pan_start[1]
+                    self.scene.camera.update_pan(dx, dy)
+                    self.pan_start = ((pts[0][0]+pts[1][0])/2, (pts[0][1]+pts[1][1])/2)
+                elif dist < self.last_distance:
+                    self.scene.camera.update_zoom(1.0)
+                else:
+                    self.scene.camera.update_zoom(-1.0)
+            self.last_distance = dist
+
+    def android_touch_end(self, touch_id):
+        if touch_id in self.touches:
+            del self.touches[touch_id]
+        self.sculpting = False
+        self.single_touch_active = False
+
+    def render_frame(self):
+        """رسم إطار واحد مع المجسم"""
+        # تحديد لون الخلفية
+        glClearColor(*self.scene.bg_color)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        # تفعيل المضلعات
+        glEnable(GL_DEPTH_TEST)
+        
+        # تحديث الكاميرا
+        view = glm.lookAt(self.scene.camera.eye, self.scene.camera.target, self.scene.camera.up)
+        proj = glm.perspective(glm.radians(45.0), 1280/720, 0.1, 100.0)
+        
+        # رسم الشبكة الأرضية إذا كانت مفعلة
+        if self.scene.show_grid:
+            self.draw_grid()
+        
+        # رسم المجسم/النموذج (الكرة الافتراضية الآن)
+        self.draw_mesh(view, proj)
+        
+        # تطبيق النحت إذا كان يجري
+        if self.sculpting and self.core.compute_program:
+            glUseProgram(self.core.compute_program)
+            
+            # حساب موضع الفرشاة بناءً على موضع الماوس والكاميرا
+            brush_pos = self.scene.camera.target  # موضع بسيط وسط النموذج
+            
+            glUniform3f(glGetUniformLocation(self.core.compute_program, "brushPos"), *brush_pos)
+            glUniform1f(glGetUniformLocation(self.core.compute_program, "radius"), self.studio.radius)
+            glUniform1f(glGetUniformLocation(self.core.compute_program, "strength"), self.studio.strength)
+            glUniform1i(glGetUniformLocation(self.core.compute_program, "isSculpting"), True)
+            
+            glDispatchCompute((self.core.max_verts // 256), 1, 1)
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT)
+            
+            # تطبيق Relax إذا كان مفعلاً
+            if self.studio.relax_enabled:
+                self.studio.apply_relax()
+        
+        # تحديث مراقبة الذاكرة
+        camera_dir = glm.normalize(self.scene.camera.target - self.scene.camera.eye)
+        self.guardian.monitor_and_mask(tuple(camera_dir))
+
+    def draw_mesh(self, view, proj):
+        """رسم المجسم على الشاشة"""
+        if self.core.render_program is None:
+            return
+        
+        glUseProgram(self.core.render_program)
+        glBindVertexArray(self.core.vao)
+        
+        # مصفوفات التحويل
+        model = glm.mat4(1.0)
+        view_loc = glGetUniformLocation(self.core.render_program, "view")
+        proj_loc = glGetUniformLocation(self.core.render_program, "projection")
+        
+        glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm.value_ptr(view))
+        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm.value_ptr(proj))
+        
+        # رسم المجسم
+        glDrawArrays(GL_POINTS, 0, self.core.max_verts)
+        glBindVertexArray(0)
+
+    def draw_grid(self):
+        """رسم شبكة مرجعية على الأرض"""
+        glDisable(GL_DEPTH_TEST)
+        glLineWidth(0.5)
+        glColor3f(0.3, 0.3, 0.3)
+        
+        glBegin(GL_LINES)
+        size = 10
+        step = 1
+        for i in range(-size, size+1, step):
+            glVertex3f(i, -5, -size)
+            glVertex3f(i, -5, size)
+            glVertex3f(-size, -5, i)
+            glVertex3f(size, -5, i)
+        glEnd()
+        
+        glEnable(GL_DEPTH_TEST)
+
+    def main_loop(self):
+        """حلقة الرسم الرئيسية"""
+        while self.running and not glfw.window_should_close(self.window):
+            # معالجة أحداث GLFW
+            glfw.poll_events()
+            
+            # رسم إطار OpenGL
+            self.render_frame()
+            
+            # رسم واجهة dearpygui
+            dpg.render_frame()
+            
+            # تبديل الـ buffers
+            glfw.swap_buffers(self.window)
+            
+            # حد أقصى 60 FPS
+            import time
+            time.sleep(1/60)
+
+    def cleanup(self):
+        """تنظيف الموارد"""
+        dpg.destroy_context()
+        glfw.destroy_window(self.window)
+        glfw.terminate()
+        print("[FireBrush] تم الإغلاق بنجاح ✅")
+
+    def new_project(self):
+        """مشروع جديد"""
+        print("[Project] مشروع جديد")
+
+    def import_model(self):
+        """استيراد نموذج"""
+        print("[Import] استيراد نموذج")
+
+    def export_model(self):
+        """تصدير النموذج"""
+        print("[Export] تصدير النموذج")
+
+
+# --- نقطة الدخول الرئيسية ---
+if __name__ == "__main__":
+    app = FireBrushApplication()
+    app.main_loop()
+    app.cleanup()
