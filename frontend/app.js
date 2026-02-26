@@ -56,6 +56,10 @@ const brushes = {
 };
 let currentBrush = 'clay';
 let negativeMode = false;
+let showUIEnabled = true;
+let hotkeysEnabled = false;
+let cameraSpeedMult = 1;
+let uiScale = 1;
 
 // Undo/Redo system
 const undoStack = [];
@@ -582,6 +586,17 @@ function setupMenus(){
     if(!act) return;
     handleEditAction(act);
   });
+  // window submenu actions
+  document.getElementById('window-menu').addEventListener('change', e=>{
+    const act = e.target.dataset.action;
+    if(!act) return;
+    handleWindowAction(act, e.target);
+  });
+  document.getElementById('window-menu').addEventListener('input', e=>{
+    const act = e.target.dataset.action;
+    if(!act) return;
+    handleWindowAction(act, e.target);
+  });
 }
 
 function handleEditAction(action){
@@ -611,6 +626,55 @@ function handleEditAction(action){
       addPyramid();
       break;
   }
+}
+
+function handleWindowAction(action, el){
+  switch(action){
+    case 'toggle-ui':
+      showUIEnabled = el.checked;
+      const ui = document.getElementById('ui');
+      ui.classList.toggle('hide-ui', !showUIEnabled);
+      break;
+    case 'toggle-hotkeys':
+      hotkeysEnabled = el.checked;
+      if(hotkeysEnabled) setupHotkeys();
+      break;
+    case 'camera-speed':
+      cameraSpeedMult = parseFloat(el.value) / 0.005;
+      controls.dampingFactor = 0.07 * cameraSpeedMult;
+      break;
+    case 'ui-scale':
+      uiScale = parseFloat(el.value);
+      const ui2 = document.getElementById('ui');
+      ui2.classList.remove('scale-reduced', 'scale-normal', 'scale-enlarged');
+      if(uiScale < 0.8) ui2.classList.add('scale-reduced');
+      else if(uiScale > 1.2) ui2.classList.add('scale-enlarged');
+      else ui2.classList.add('scale-normal');
+      break;
+    case 'bg-color':
+      scene.background = new THREE.Color(el.value);
+      break;
+    case 'ui-color':
+      const hue = parseInt(el.value.substring(1), 16) % 360;
+      document.getElementById('ui').style.filter = `hue-rotate(${hue}deg) brightness(0.8)`;
+      break;
+  }
+}
+
+function setupHotkeys(){
+  if(window._hotkeysBound) return;
+  window._hotkeysBound = true;
+  window.addEventListener('keydown', e=>{
+    if(!hotkeysEnabled) return;
+    if(e.ctrlKey || e.metaKey) return;
+    const key = e.key;
+    document.querySelectorAll('button[data-action]').forEach(btn=>{
+      if(btn.textContent.endsWith(key + ')')){
+        e.preventDefault();
+        btn.click();
+      }
+    });
+  });
 }
 
 function handleFileAction(action){

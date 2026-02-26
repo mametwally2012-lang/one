@@ -35,7 +35,14 @@
       <button data-action=\"add-pyramid\">Add Pyramid</button>
     </div>
     <div class="submenu" id="window-menu">
-      <!-- window actions -->
+      <label><input type="checkbox" data-action="toggle-ui" checked> Show UI</label>
+      <label><input type="checkbox" data-action="toggle-hotkeys"> Hotkeys (experimental)</label>
+      <hr style="margin:4px 0;border:none;border-top:1px solid #555">
+      <label>Camera Speed: <input type="range" data-action="camera-speed" min="0.001" max="0.1" step="0.001" value="0.005" style="width:80px"></label>
+      <label>UI Scale: <input type="range" data-action="ui-scale" min="0.5" max="2" step="0.1" value="1" style="width:80px"></label>
+      <hr style="margin:4px 0;border:none;border-top:1px solid #555">
+      <label>BG Color: <input type="color" data-action="bg-color" value="#111111" style="width:40px;height:24px"></label>
+      <label>UI Color: <input type="color" data-action="ui-color" value="#000000" style="width:40px;height:24px"></label>
     </div>
     <div class="submenu" id="sculpt-menu">
       <!-- sculpt-specific actions -->
